@@ -69,7 +69,7 @@
 <body>
     <div class="container">
         <h1>🔧 JLR BCM Repair</h1>
-        <div class="subtitle">MC9S12XET256 2M53J D-Flash Converter</div>
+        <div class="subtitle">MC9S12XET256 D-Flash Converter</div>
 
         <label for="fileInput">Загрузите дамп D-Flash (.bin, 32 КБ)</label>
         <input type="file" id="fileInput" accept=".bin,.BIN">
@@ -150,26 +150,43 @@
             reader.readAsArrayBuffer(file);
         });
 
+        // ИСПРАВЛЕННЫЙ ОБРАБОТЧИК СКАЧИВАНИЯ
         downloadBtn.addEventListener('click', async () => {
             if (!eepromFile) return;
 
+            // 1. Пробуем Web Share (лучший вариант для Android/iOS)
             try {
                 if (navigator.canShare && navigator.canShare({ files: [eepromFile] })) {
                     await navigator.share({ files: [eepromFile] });
                     return;
                 }
             } catch (err) {
-                console.log('Share не поддерживается, переходим к скачиванию');
+                console.log('Share отклонён или не поддерживается');
             }
 
+            // 2. Пробуем открыть blob URL (может сработать в некоторых браузерах)
             const url = URL.createObjectURL(eepromFile);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = eepromFile.name;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            const win = window.open(url, '_blank');
+            
+            // 3. Если окно не открылось – показываем прямую ссылку для ручного скачивания
+            if (!win) {
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = eepromFile.name;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                // Даём пользователю время скачать, затем удаляем URL
+                setTimeout(() => {
+                    if (!win) {
+                        alert('Если файл не скачался автоматически, скопируйте ссылку и откройте в браузере:\n' + url);
+                    }
+                }, 1000);
+            }
+
+            // Через 5 секунд освобождаем URL
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
 
             try { tg.HapticFeedback.impactOccurred('medium'); } catch(e) {}
         });
