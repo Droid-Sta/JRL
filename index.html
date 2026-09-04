@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <title>JLR BCM Repair</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(to bottom, #1a2a3a, #2c3e50);
+            min-height: 100vh;
+            display: flex; justify-content: center; align-items: center;
+            color: #fff; padding: 20px;
+        }
+        .container {
+            background: rgba(255,255,255,0.08);
+            backdrop-filter: blur(10px);
+            border-radius: 20px; padding: 30px; max-width: 600px; width: 100%;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2);
+        }
+        h1 { text-align: center; margin-bottom: 10px; font-size: 1.6rem; letter-spacing: 1px; }
+        .subtitle { text-align: center; opacity: 0.8; margin-bottom: 20px; font-size: 0.9rem; }
+
+        label { display: block; margin-top: 15px; font-size: 0.9rem; opacity: 0.9; }
+        input[type="file"] {
+            width: 100%; padding: 12px; margin-top: 5px; border-radius: 10px;
+            border: none; background: rgba(255,255,255,0.15); color: #fff;
+            font-size: 1rem; outline: none; transition: 0.3s;
+        }
+        input[type="file"]::file-selector-button {
+            background: #4a90e2; color: white; border: none; padding: 8px 12px;
+            border-radius: 8px; margin-right: 10px; font-family: inherit; cursor: pointer;
+        }
+        button {
+            width: 100%; padding: 14px; margin-top: 20px; border: none; border-radius: 12px;
+            background: linear-gradient(135deg, #4a90e2, #357abd); color: white;
+            font-size: 1.1rem; font-weight: 600; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s;
+        }
+        button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(74,144,226,0.4); }
+        button:active { transform: translateY(0); }
+        button:disabled { opacity: 0.5; transform: none; box-shadow: none; cursor: default; }
+
+        .result {
+            margin-top: 20px; padding: 20px; background: rgba(0,0,0,0.3);
+            border-radius: 12px; display: none; word-break: break-all;
+            font-family: monospace; font-size: 1rem; letter-spacing: 1px;
+        }
+        .result-item { margin-bottom: 12px; }
+        .result-label {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 0.8rem; opacity: 0.7; letter-spacing: 0; margin-bottom: 3px;
+        }
+        .result-value { font-family: monospace; font-size: 1.1rem; letter-spacing: 1px; color: #fff; }
+        .warning { color: #ff6b6b; font-weight: bold; margin-bottom: 10px; }
+
+        .download-btn {
+            background: #27ae60;
+            margin-top: 10px;
+        }
+        .download-btn:hover { box-shadow: 0 5px 15px rgba(39,174,96,0.4); }
+        .info { margin-top: 15px; font-size: 0.8rem; opacity: 0.7; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 JLR BCM Repair</h1>
+        <div class="subtitle">MC9S12XEQ384 D-Flash Converter</div>
+
+        <label for="fileInput">Загрузите дамп D-Flash (.bin, 32 КБ)</label>
+        <input type="file" id="fileInput" accept=".bin,.BIN">
+
+        <button id="convertBtn" disabled>Конвертировать</button>
+
+        <div class="result" id="result">
+            <div class="warning" id="corruptWarning" style="display: none;">⚠️ Обнаружены повреждённые данные в дампе!</div>
+            <div class="result-item">
+                <div class="result-label">BCM Part Number</div>
+                <div class="result-value" id="bcm"></div>
+            </div>
+            <div class="result-item">
+                <div class="result-label">VIN</div>
+                <div class="result-value" id="vin"></div>
+            </div>
+            <button class="download-btn" id="downloadBtn" style="display: none;">Скачать EEPROM</button>
+        </div>
+        <div class="info">Загрузите бинарный файл D-Flash размером 32 КБ (128 блоков × 256 байт)</div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        const fileInput = document.getElementById('fileInput');
+        const convertBtn = document.getElementById('convertBtn');
+        const resultDiv = document.getElementById('result');
+        const corruptWarning = document.getElementById('corruptWarning');
+        const downloadBtn = document.getElementById('downloadBtn');
+        let eepromData = null;
+        let eepromFile = null;
+
+        fileInput.addEventListener('change', () => {
+            convertBtn.disabled = !fileInput.files.length;
+        });
+
+        convertBtn.addEventListener('click', () => {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const arrayBuffer = e.target.result;
+                try {
+                    const converter = new DFlashConverter();
+                    converter.readFile(arrayBuffer);
+                    converter.findEndblock();
+                    eepromData = converter.buildEeprom();
+                    displayInfo(converter);
+
+                    // Формируем байты для файла
+                    const bytes = new Uint8Array(eepromData.length * 2);
+                    const view = new DataView(bytes.buffer);
+                    for (let i = 0; i < eepromData.length; i++) {
+                        view.setUint16(i * 2, eepromData[i], false);
+                    }
+
+                    // Обрезка: оставляем данные начиная с 0x800 (2048 байт)
+                    const trimmedBytes = bytes.slice(0x800);
+
+                    // Создаём Blob и File с именем
+                    const blob = new Blob([trimmedBytes], { type: 'application/octet-stream' });
+                    const dateStr = new Date().toISOString().slice(0,10);
+                    const fileName = `${dateStr}_eeprom.bin`;
+                    eepromFile = new File([blob], fileName, { type: 'application/octet-stream' });
+
+                    convertBtn.disabled = true;
+                    resultDiv.style.display = 'block';
+                    downloadBtn.style.display = 'block';
+
+                    try { tg.HapticFeedback.impactOccurred('medium'); } catch(e) {}
+                } catch (err) {
+                    alert('Ошибка: ' + err.message);
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        downloadBtn.addEventListener('click', async () => {
+            if (!eepromFile) return;
+
+            try {
+                if (navigator.canShare && navigator.canShare({ files: [eepromFile] })) {
+                    await navigator.share({ files: [eepromFile] });
+                    return;
+                }
+            } catch (err) {
+                console.log('Share не поддерживается, переходим к скачиванию');
+            }
+
+            const url = URL.createObjectURL(eepromFile);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = eepromFile.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+            try { tg.HapticFeedback.impactOccurred('medium'); } catch(e) {}
+        });
+
+        function displayInfo(converter) {
+            const info = converter.getInfo();
+            document.getElementById('bcm').textContent = info.bcm;
+            document.getElementById('vin').textContent = info.vin;
+            if (converter.corrupt) {
+                corruptWarning.style.display = 'block';
+            }
+        }
+
+        // ================== Класс DFlashConverter ==================
+        class DFlashConverter {
+            constructor() {
+                this.NB_BLOCKS = 128;
+                this.BLOCKSIZE = 256;
+                this.HEADERSIZE = 4;
+                this.CMDSIZE = 4;
+                this.EESIZE = 2048;
+                this.BLOCK_VALID = 0xFACF;
+                this.BLOCK_EMPTY = 0xFFFF;
+                this.CMD_MASK = 0xF800;
+                this.CMD_VALID = 0xB800;
+                this.CMD_EMPTY = 0xF800;
+                this.ADDR_MASK = 0x07FF;
+
+                this.block_types = [];
+                this.block_data = [];
+                this.endblock = null;
+                this.corrupt = false;
+                this.data = null;
+                this.originalBuffer = null;
+                this.cmds_per_block = (this.BLOCKSIZE - this.HEADERSIZE) / this.CMDSIZE;
+            }
+
+            readFile(arrayBuffer) {
+                this.corrupt = false;
+                this.originalBuffer = arrayBuffer;
+                if (arrayBuffer.byteLength < this.NB_BLOCKS * this.BLOCKSIZE) {
+                    throw new Error('Файл слишком короткий. Ожидается минимум ' + (this.NB_BLOCKS * this.BLOCKSIZE) + ' байт.');
+                }
+                const view = new DataView(arrayBuffer);
+
+                this.block_data = Array.from({ length: this.NB_BLOCKS }, () => []);
+                this.block_types = [];
+
+                for (let blockid = 0; blockid < this.NB_BLOCKS; blockid++) {
+                    const offset = blockid * this.BLOCKSIZE;
+                    const header0 = view.getUint16(offset, false);
+                    const header1 = view.getUint16(offset + 2, false);
+
+                    if (header0 === this.BLOCK_EMPTY) {
+                        if (header1 === this.BLOCK_EMPTY) {
+                            this.block_types.push('EMPTY');
+                        } else {
+                            this.block_types.push('NEW');
+                        }
+                    } else if (header0 === this.BLOCK_VALID) {
+                        this.block_types.push('VALID');
+                        for (let item = 0; item < this.cmds_per_block; item++) {
+                            const cmdOffset = offset + this.HEADERSIZE + item * this.CMDSIZE;
+                            const word0 = view.getUint16(cmdOffset, false);
+                            const word1 = view.getUint16(cmdOffset + 2, false);
+
+                            const cmd = word0 & this.CMD_MASK;
+                            const addr = word0 & this.ADDR_MASK;
+                            const data = word1;
+
+                            if (cmd === this.CMD_VALID) {
+                                this.block_data[blockid].push({ addr, data });
+                            } else if (cmd === this.CMD_EMPTY) {
+                                this.block_types[this.block_types.length - 1] = 'LAST';
+                            } else {
+                                console.error('Неизвестная команда: 0x' + cmd.toString(16));
+                                this.corrupt = true;
+                            }
+                        }
+                    } else {
+                        console.error('Неизвестный тип блока: 0x' + header0.toString(16));
+                        this.corrupt = true;
+                        this.block_types.push('INVALID');
+                    }
+                }
+            }
+
+            findNewBlocks() {
+                const blockTypes = [...this.block_types];
+                let currBlock = 0;
+                while (currBlock < this.NB_BLOCKS && (blockTypes[currBlock] === 'NEW' || blockTypes[currBlock] === 'EMPTY')) {
+                    blockTypes.push(blockTypes[currBlock]);
+                    currBlock++;
+                    if (currBlock > this.NB_BLOCKS) {
+                        throw new Error('Все блоки являются новыми');
+                    }
+                }
+
+                let newblock = null;
+                let ended = false;
+                for (let i = currBlock; i < blockTypes.length; i++) {
+                    if (blockTypes[i] === 'NEW') {
+                        if (newblock === null) {
+                            newblock = i;
+                        } else if (ended) {
+                            console.warn('Найдено более одного набора новых блоков!');
+                            return null;
+                        }
+                    } else if (blockTypes[i] !== 'EMPTY' && newblock !== null) {
+                        ended = true;
+                    }
+                }
+                if (newblock === null) {
+                    console.warn('Новые блоки не найдены!');
+                    return null;
+                }
+                return (newblock - 1 + this.NB_BLOCKS) % this.NB_BLOCKS;
+            }
+
+            findLastBlock() {
+                const count = this.block_types.filter(t => t === 'LAST').length;
+                if (count === 1) {
+                    return this.block_types.indexOf('LAST');
+                }
+                if (count === 0) {
+                    console.warn('Последний блок не найден!');
+                    return null;
+                }
+                console.warn('Найдено более одного "последнего" блока!');
+                return null;
+            }
+
+            findLongestEmpty() {
+                let now = 0;
+                let longest = 0;
+                let longestBlock = null;
+                const doubled = [...this.block_types, ...this.block_types];
+                for (let i = 0; i < doubled.length; i++) {
+                    if (doubled[i] === 'EMPTY' || doubled[i] === 'NEW') {
+                        now++;
+                    } else {
+                        now = 0;
+                    }
+                    if (now > longest) {
+                        longest = now;
+                        longestBlock = i;
+                    }
+                }
+                if (longestBlock === null) {
+                    return this.NB_BLOCKS - 1;
+                }
+                return (longestBlock - longest + this.NB_BLOCKS) % this.NB_BLOCKS;
+            }
+
+            findEndblock() {
+                const endblockNew = this.findNewBlocks();
+                const endblockLast = this.findLastBlock();
+
+                if (endblockNew === null) {
+                    if (endblockLast === null) {
+                        console.warn('Нет ни новых, ни последних блоков, используется самая длинная цепочка пустых блоков.');
+                        this.endblock = this.findLongestEmpty();
+                    } else {
+                        this.endblock = endblockLast;
+                    }
+                } else {
+                    if (endblockLast !== null && endblockLast !== endblockNew) {
+                        const blockTypes = [...this.block_types, ...this.block_types];
+                        let endblockNewWrapped = endblockNew;
+                        if (endblockNewWrapped < endblockLast) {
+                            endblockNewWrapped += this.NB_BLOCKS;
+                        }
+                        const slice = blockTypes.slice(endblockLast + 1, endblockNewWrapped + 1);
+                        const emptyCount = slice.filter(t => t === 'EMPTY').length;
+                        if (emptyCount !== endblockNewWrapped - endblockLast) {
+                            console.warn('Несоответствие: последний используемый блок не следует за новыми блоками!');
+                            console.warn('Используются новые блоки в качестве ориентира.');
+                        }
+                    }
+                    this.endblock = endblockNew;
+                }
+            }
+
+            buildEeprom() {
+                const startblock = (this.endblock + 1) % this.NB_BLOCKS;
+                const data = new Uint16Array(this.EESIZE);
+                data.fill(0xFFFF);
+
+                let block = startblock;
+                for (let count = 0; count < this.NB_BLOCKS; count++) {
+                    const commands = this.block_data[block];
+                    for (const cmd of commands) {
+                        data[cmd.addr] = cmd.data;
+                    }
+                    block = (block + 1) % this.NB_BLOCKS;
+                }
+
+                this.data = data;
+                return data;
+            }
+
+            getByte(addr) {
+                if (addr % 2 === 1) {
+                    return this.data[Math.floor(addr / 2)] & 0xFF;
+                }
+                return this.data[Math.floor(addr / 2)] >> 8;
+            }
+
+            getInfo() {
+                // BCM: смещение 0x10 в обрезанном файле → абсолютный адрес в EEPROM = 0x800 + 0x10
+                const bcmOffset = 0x800 + 0x10;
+                let bcm = '';
+                for (let addr = bcmOffset; addr < bcmOffset + 14; addr++) {
+                    bcm += String.fromCharCode(this.getByte(addr));
+                }
+
+                // VIN: смещение 0x50 в обрезанном файле → абсолютный адрес в EEPROM = 0x800 + 0x50
+                const vinOffset = 0x800 + 0x50;
+                let vin = '';
+                for (let addr = vinOffset; addr < vinOffset + 17; addr++) {
+                    vin += String.fromCharCode(this.getByte(addr));
+                }
+
+                return { bcm, vin };
+            }
+        }
+    </script>
+</body>
+</html>
