@@ -69,7 +69,7 @@
 <body>
     <div class="container">
         <h1>🔧 JLR BCM Repair</h1>
-        <div class="subtitle">MC9S12XEQ384 D-Flash Converter</div>
+        <div class="subtitle">MC9S12XEQ256 D-Flash Converter</div>
 
         <label for="fileInput">Загрузите дамп D-Flash (.bin, 32 КБ)</label>
         <input type="file" id="fileInput" accept=".bin,.BIN">
@@ -79,11 +79,11 @@
         <div class="result" id="result">
             <div class="warning" id="corruptWarning" style="display: none;">⚠️ Обнаружены повреждённые данные в дампе!</div>
             <div class="result-item">
-                <div class="result-label">BCM Part Number (смещение 0x10 в обрезанном файле)</div>
+                <div class="result-label">BCM Part Number</div>
                 <div class="result-value" id="bcm"></div>
             </div>
             <div class="result-item">
-                <div class="result-label">VIN (смещение 0x50 в обрезанном файле)</div>
+                <div class="result-label">VIN</div>
                 <div class="result-value" id="vin"></div>
             </div>
             <button class="download-btn" id="downloadBtn" style="display: none;">Скачать EEPROM</button>
@@ -150,25 +150,46 @@
             reader.readAsArrayBuffer(file);
         });
 
-        // СКАЧИВАНИЕ: только Web Share API (работает на Android/iOS)
+        // ИСПРАВЛЕННЫЙ ОБРАБОТЧИК СКАЧИВАНИЯ — НЕСКОЛЬКО МЕТОДОВ
         downloadBtn.addEventListener('click', async () => {
             if (!eepromFile) return;
 
-            if (navigator.share) {
-                try {
-                    await navigator.share({
-                        files: [eepromFile],
-                        title: 'EEPROM JLR',
-                        text: 'Скачать восстановленный EEPROM'
-                    });
+            // 1. Пробуем Web Share API (лучший вариант для Android/iOS)
+            try {
+                if (navigator.canShare && navigator.canShare({ files: [eepromFile] })) {
+                    await navigator.share({ files: [eepromFile] });
                     return;
-                } catch (err) {
-                    console.log('Share не удалось: ' + err.message);
                 }
+            } catch (err) {
+                console.log('Share не удалось: ' + err.message);
             }
 
-            // Если share недоступен или не сработал
-            alert('Скачивание не поддерживается в этом браузере. Пожалуйста, используйте Chrome.');
+            // 2. Пробуем открыть blob URL (некоторые WebView позволяют)
+            const url = URL.createObjectURL(eepromFile);
+            const win = window.open(url, '_blank');
+            
+            // 3. Если окно не открылось – пробуем скрытую ссылку
+            if (!win) {
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = eepromFile.name;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                // Даём время на скачивание, затем проверяем, скачался ли файл
+                setTimeout(() => {
+                    // Если всё ещё не скачалось – сообщаем без ссылки
+                    if (!win) {
+                        alert('Не удалось скачать файл автоматически. Пожалуйста, откройте эту страницу в браузере Chrome и попробуйте ещё раз.');
+                    }
+                }, 1000);
+            }
+
+            // Освобождаем URL через 5 секунд
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+            try { tg.HapticFeedback.impactOccurred('medium'); } catch(e) {}
         });
 
         function displayInfo(converter) {
