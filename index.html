@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
-    <title>FRM3 D-Flash Converter</title>
+    <title>JLR BCM Repair</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -68,8 +68,8 @@
 </head>
 <body>
     <div class="container">
-        <h1>🔧 FRM3 D-Flash Converter</h1>
-        <div class="subtitle">MC9S12XEQ384 eeprom repair</div>
+        <h1>🔧 JLR BCM Repair</h1>
+        <div class="subtitle">MC9S12XET256 eeprom repair</div>
 
         <label for="fileInput">Загрузите дамп D-Flash (.bin, 32 КБ)</label>
         <input type="file" id="fileInput" accept=".bin,.BIN">
@@ -79,32 +79,12 @@
         <div class="result" id="result">
             <div class="warning" id="corruptWarning" style="display: none;">⚠️ Обнаружены повреждённые данные в дампе!</div>
             <div class="result-item">
+                <div class="result-label">BCM Part Number</div>
+                <div class="result-value" id="bcm"></div>
+            </div>
+            <div class="result-item">
                 <div class="result-label">VIN</div>
                 <div class="result-value" id="vin"></div>
-            </div>
-            <div class="result-item">
-                <div class="result-label">Production date</div>
-                <div class="result-value" id="prodDate"></div>
-            </div>
-            <div class="result-item">
-                <div class="result-label">Programming date</div>
-                <div class="result-value" id="progDate"></div>
-            </div>
-            <div class="result-item">
-                <div class="result-label">HW-NR (Hardware part number)</div>
-                <div class="result-value" id="hwNr"></div>
-            </div>
-            <div class="result-item">
-                <div class="result-label">SW-NR (Updated part number)</div>
-                <div class="result-value" id="swNr"></div>
-            </div>
-            <div class="result-item">
-                <div class="result-label">ZB-NR (Original part number)</div>
-                <div class="result-value" id="zbNr"></div>
-            </div>
-            <div class="result-item">
-                <div class="result-label">S (Original part number)</div>
-                <div class="result-value" id="sNr"></div>
             </div>
             <button class="download-btn" id="downloadBtn" style="display: none;">Скачать EEPROM</button>
         </div>
@@ -149,13 +129,15 @@
                         view.setUint16(i * 2, eepromData[i], false);
                     }
 
+                    // Обрезка: оставляем данные начиная с 0x800 (2048 байт)
+                    const trimmedBytes = bytes.slice(0x800);
+
                     // Создаём Blob и File с именем
-                    const blob = new Blob([bytes], { type: 'application/octet-stream' });
-                    const dateStr = new Date().toISOString().slice(0,10); // YYYY-MM-DD
+                    const blob = new Blob([trimmedBytes], { type: 'application/octet-stream' });
+                    const dateStr = new Date().toISOString().slice(0,10);
                     const fileName = `${dateStr}_eeprom.bin`;
                     eepromFile = new File([blob], fileName, { type: 'application/octet-stream' });
 
-                    // Показываем результат
                     convertBtn.disabled = true;
                     resultDiv.style.display = 'block';
                     downloadBtn.style.display = 'block';
@@ -172,17 +154,14 @@
             if (!eepromFile) return;
 
             try {
-                // Пытаемся использовать Web Share API (лучше всего работает на iOS)
                 if (navigator.canShare && navigator.canShare({ files: [eepromFile] })) {
                     await navigator.share({ files: [eepromFile] });
-                    // Успешно передано через share sheet
                     return;
                 }
             } catch (err) {
-                console.log('Share отклонён или не поддерживается, переходим к скачиванию');
+                console.log('Share не поддерживается, переходим к скачиванию');
             }
 
-            // Стандартное скачивание через <a download>
             const url = URL.createObjectURL(eepromFile);
             const a = document.createElement('a');
             a.href = url;
@@ -197,13 +176,8 @@
 
         function displayInfo(converter) {
             const info = converter.getInfo();
+            document.getElementById('bcm').textContent = info.bcm;
             document.getElementById('vin').textContent = info.vin;
-            document.getElementById('prodDate').textContent = info.prodDate;
-            document.getElementById('progDate').textContent = info.progDate;
-            document.getElementById('hwNr').textContent = info.hwNr;
-            document.getElementById('swNr').textContent = info.swNr;
-            document.getElementById('zbNr').textContent = info.zbNr;
-            document.getElementById('sNr').textContent = info.sNr;
             if (converter.corrupt) {
                 corruptWarning.style.display = 'block';
             }
@@ -229,11 +203,13 @@
                 this.endblock = null;
                 this.corrupt = false;
                 this.data = null;
+                this.originalBuffer = null;
                 this.cmds_per_block = (this.BLOCKSIZE - this.HEADERSIZE) / this.CMDSIZE;
             }
 
             readFile(arrayBuffer) {
                 this.corrupt = false;
+                this.originalBuffer = arrayBuffer;
                 if (arrayBuffer.byteLength < this.NB_BLOCKS * this.BLOCKSIZE) {
                     throw new Error('Файл слишком короткий. Ожидается минимум ' + (this.NB_BLOCKS * this.BLOCKSIZE) + ' байт.');
                 }
@@ -403,56 +379,21 @@
             }
 
             getInfo() {
+                // BCM: смещение 0x10 в обрезанном файле → абсолютный адрес в EEPROM = 0x800 + 0x10
+                const bcmOffset = 0x800 + 0x10;
+                let bcm = '';
+                for (let addr = bcmOffset; addr < bcmOffset + 14; addr++) {
+                    bcm += String.fromCharCode(this.getByte(addr));
+                }
+
+                // VIN: смещение 0x50 в обрезанном файле → абсолютный адрес в EEPROM = 0x800 + 0x50
+                const vinOffset = 0x800 + 0x50;
                 let vin = '';
-                for (let addr = 0xFD3; addr < 0xFE4; addr++) {
+                for (let addr = vinOffset; addr < vinOffset + 17; addr++) {
                     vin += String.fromCharCode(this.getByte(addr));
                 }
 
-                const prodDay = this.getByte(0xFBE).toString(16).padStart(2, '0');
-                const prodMonth = this.getByte(0xFBD).toString(16).padStart(2, '0');
-                const prodYear = this.getByte(0xFBB).toString(16).padStart(2, '0') +
-                                 this.getByte(0xFBC).toString(16).padStart(2, '0');
-                const prodDate = `${prodDay}.${prodMonth}.${prodYear}`;
-
-                const progDay = this.getByte(0xF89).toString(16).padStart(2, '0');
-                const progMonth = this.getByte(0xF88).toString(16).padStart(2, '0');
-                const progYear = this.getByte(0xF86).toString(16).padStart(2, '0') +
-                                 this.getByte(0xF87).toString(16).padStart(2, '0');
-                const progDate = `${progDay}.${progMonth}.${progYear}`;
-
-                let hwNr = 0;
-                for (let addr = 0xF97; addr < 0xF9D; addr++) {
-                    hwNr = (hwNr << 8) + this.getByte(addr);
-                }
-                const hwNrStr = hwNr.toString(16).padStart(7, '0');
-
-                let swNr = 0;
-                for (let addr = 0xF8A; addr < 0xF90; addr++) {
-                    swNr = (swNr << 8) + this.getByte(addr);
-                }
-                const swNrStr = swNr.toString(16).padStart(7, '0');
-
-                let zbNr = 0;
-                for (let addr = 0xF65; addr < 0xF6B; addr++) {
-                    zbNr = (zbNr << 8) + this.getByte(addr);
-                }
-                const zbNrStr = zbNr.toString(16).padStart(7, '0');
-
-                let sNr = 0;
-                for (let addr = 0xFBF; addr < 0xFC5; addr++) {
-                    sNr = (sNr << 8) + this.getByte(addr);
-                }
-                const sNrStr = sNr.toString(16).padStart(7, '0');
-
-                return {
-                    vin,
-                    prodDate,
-                    progDate,
-                    hwNr: hwNrStr,
-                    swNr: swNrStr,
-                    zbNr: zbNrStr,
-                    sNr: sNrStr
-                };
+                return { bcm, vin };
             }
         }
     </script>
