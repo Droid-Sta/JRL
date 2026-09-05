@@ -63,13 +63,37 @@
             margin-top: 10px;
         }
         .download-btn:hover { box-shadow: 0 5px 15px rgba(39,174,96,0.4); }
+
+        .direct-link-container {
+            margin-top: 15px;
+            padding: 10px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+        }
+        .direct-link {
+            color: #4a90e2;
+            word-break: break-all;
+            text-decoration: underline;
+            font-size: 0.9rem;
+            display: block;
+            margin-bottom: 8px;
+        }
+        .copy-link-btn {
+            background: #f39c12;
+            margin-top: 5px;
+            font-size: 0.9rem;
+            padding: 8px;
+            border-radius: 8px;
+        }
+        .copy-link-btn:hover { box-shadow: 0 4px 12px rgba(243,156,18,0.4); }
+
         .info { margin-top: 15px; font-size: 0.8rem; opacity: 0.7; text-align: center; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🔧 JLR BCM Repair</h1>
-        <div class="subtitle">MC9S12XET256 🫠2M53J D-Flash Converter</div>
+        <div class="subtitle">MC9S12XET256 2M53J D-Flash Converter</div>
 
         <label for="fileInput">Загрузите дамп D-Flash (.bin, 32 КБ)</label>
         <input type="file" id="fileInput" accept=".bin,.BIN">
@@ -87,6 +111,13 @@
                 <div class="result-value" id="vin"></div>
             </div>
             <button class="download-btn" id="downloadBtn" style="display: none;">Скачать EEPROM</button>
+            
+            <!-- Блок прямой ссылки (показывается после конвертации) -->
+            <div class="direct-link-container" id="directLinkContainer" style="display: none;">
+                <div class="result-label" style="opacity:0.8;">Если файл не загружается, используйте прямую ссылку:</div>
+                <a href="#" id="directLink" class="direct-link" download="eeprom.bin">Прямая ссылка на загрузку файла</a>
+                <button class="copy-link-btn" id="copyLinkBtn">Копировать ссылку</button>
+            </div>
         </div>
         <div class="info">Загрузите бинарный файл D-Flash размером 32 КБ (128 блоков × 256 байт)</div>
     </div>
@@ -101,8 +132,13 @@
         const resultDiv = document.getElementById('result');
         const corruptWarning = document.getElementById('corruptWarning');
         const downloadBtn = document.getElementById('downloadBtn');
+        const directLinkContainer = document.getElementById('directLinkContainer');
+        const directLink = document.getElementById('directLink');
+        const copyLinkBtn = document.getElementById('copyLinkBtn');
+
         let eepromData = null;
         let eepromFile = null;
+        let eepromDataUrl = null;
 
         fileInput.addEventListener('change', () => {
             convertBtn.disabled = !fileInput.files.length;
@@ -138,6 +174,16 @@
                     const fileName = `${dateStr}_eeprom.bin`;
                     eepromFile = new File([blob], fileName, { type: 'application/octet-stream' });
 
+                    // Создаём data URL для прямой ссылки
+                    const readerDataUrl = new FileReader();
+                    readerDataUrl.onload = function(e) {
+                        eepromDataUrl = e.target.result;
+                        directLink.href = eepromDataUrl;
+                        directLink.download = fileName;
+                        directLinkContainer.style.display = 'block';
+                    };
+                    readerDataUrl.readAsDataURL(blob);
+
                     convertBtn.disabled = true;
                     resultDiv.style.display = 'block';
                     downloadBtn.style.display = 'block';
@@ -150,13 +196,14 @@
             reader.readAsArrayBuffer(file);
         });
 
+        // Обработчик кнопки "Скачать EEPROM"
         downloadBtn.addEventListener('click', async () => {
             if (!eepromFile) return;
 
-            // Определяем, является ли устройство Android
+            // Определяем Android
             const isAndroid = /Android/i.test(navigator.userAgent);
 
-            // Если Android — сразу скачиваем, игнорируя share (на Android share часто не сохраняет файл)
+            // Для Android пропускаем share (часто не сохраняет файл)
             if (!isAndroid) {
                 try {
                     if (navigator.canShare && navigator.canShare({ files: [eepromFile] })) {
@@ -168,7 +215,7 @@
                 }
             }
 
-            // Надёжное скачивание для всех платформ
+            // Стандартное скачивание через <a download>
             const url = URL.createObjectURL(eepromFile);
             const a = document.createElement('a');
             a.href = url;
@@ -176,13 +223,30 @@
             a.style.display = 'none';
             document.body.appendChild(a);
             a.click();
-            // Удаляем элемент после небольшой задержки, чтобы гарантировать срабатывание
             setTimeout(() => {
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
             }, 100);
 
             try { tg.HapticFeedback.impactOccurred('medium'); } catch(e) {}
+        });
+
+        // Копирование прямой ссылки
+        copyLinkBtn.addEventListener('click', async () => {
+            if (!eepromDataUrl) return;
+            try {
+                await navigator.clipboard.writeText(eepromDataUrl);
+                tg.showAlert('Ссылка скопирована в буфер обмена');
+            } catch (err) {
+                // Fallback для старых браузеров
+                const textArea = document.createElement('textarea');
+                textArea.value = eepromDataUrl;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                tg.showAlert('Ссылка скопирована (через fallback)');
+            }
         });
 
         function displayInfo(converter) {
