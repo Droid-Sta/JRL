@@ -58,36 +58,35 @@
         .result-value { font-family: monospace; font-size: 1.1rem; letter-spacing: 1px; color: #fff; }
         .warning { color: #ff6b6b; font-weight: bold; margin-bottom: 10px; }
 
-        .download-btn {
-            background: #27ae60;
-            margin-top: 10px;
+        .download-methods {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
         }
-        .download-btn:hover { box-shadow: 0 5px 15px rgba(39,174,96,0.4); }
-
-        .direct-link-container {
-            margin-top: 15px;
-            padding: 10px;
-            background: rgba(255,255,255,0.1);
+        .download-methods .method-btn {
+            background: #2ecc71;
+            color: white;
+            border: none;
+            padding: 12px;
             border-radius: 10px;
-        }
-        .direct-link {
-            color: #4a90e2;
-            word-break: break-all;
-            text-decoration: underline;
-            font-size: 0.9rem;
-            display: block;
-            margin-bottom: 8px;
+            font-size: 1rem;
+            font-weight: 600;
             cursor: pointer;
+            transition: background 0.2s, transform 0.2s;
         }
-        .copy-link-btn {
-            background: #f39c12;
-            margin-top: 5px;
-            font-size: 0.9rem;
-            padding: 8px;
-            border-radius: 8px;
+        .download-methods .method-btn:hover {
+            background: #27ae60;
+            transform: translateY(-2px);
         }
-        .copy-link-btn:hover { box-shadow: 0 4px 12px rgba(243,156,18,0.4); }
-
+        .download-methods .method-btn:active {
+            transform: translateY(0);
+        }
+        .method-note {
+            font-size: 0.8rem;
+            opacity: 0.7;
+            margin-bottom: 4px;
+        }
         .info { margin-top: 15px; font-size: 0.8rem; opacity: 0.7; text-align: center; }
     </style>
 </head>
@@ -111,12 +110,28 @@
                 <div class="result-label">VIN</div>
                 <div class="result-value" id="vin"></div>
             </div>
-            <button class="download-btn" id="downloadBtn" style="display: none;">Скачать EEPROM</button>
-            
-            <div class="direct-link-container" id="directLinkContainer" style="display: none;">
-                <div class="result-label" style="opacity:0.8;">Если файл не загружается, нажмите на ссылку:</div>
-                <a href="#" id="directLink" class="direct-link" download="eeprom.bin">Прямая ссылка на загрузку файла</a>
-                <button class="copy-link-btn" id="copyLinkBtn">Копировать ссылку</button>
+
+            <!-- Блок с различными методами загрузки -->
+            <div class="download-methods" id="downloadMethods" style="display: none;">
+                <div class="result-label" style="font-size:1rem; opacity:0.9;">Выберите метод загрузки (если один не сработал, пробуйте другой):</div>
+                
+                <button class="method-btn" id="method1">1. Скачать через Blob URL (стандартный)</button>
+                <div class="method-note">Обычный способ, работает в большинстве браузеров.</div>
+                
+                <button class="method-btn" id="method2">2. Скачать через Data URL (base64)</button>
+                <div class="method-note">Иногда помогает, если Blob URL блокируется.</div>
+                
+                <button class="method-btn" id="method3">3. Открыть файл в новой вкладке</button>
+                <div class="method-note">Браузер может предложить сохранить файл.</div>
+                
+                <button class="method-btn" id="method4">4. Поделиться через системное меню</button>
+                <div class="method-note">Передать файл в другое приложение (Google Drive, Files и т.д.)</div>
+                
+                <button class="method-btn" id="method5">5. Скопировать файл как base64</button>
+                <div class="method-note">Скопирует содержимое в буфер обмена (можно вставить в декодер).</div>
+                
+                <button class="method-btn" id="method6">6. Скачать через iframe</button>
+                <div class="method-note">Альтернативный метод для WebView.</div>
             </div>
         </div>
         <div class="info">Загрузите бинарный файл D-Flash размером 32 КБ (128 блоков × 256 байт)</div>
@@ -131,14 +146,11 @@
         const convertBtn = document.getElementById('convertBtn');
         const resultDiv = document.getElementById('result');
         const corruptWarning = document.getElementById('corruptWarning');
-        const downloadBtn = document.getElementById('downloadBtn');
-        const directLinkContainer = document.getElementById('directLinkContainer');
-        const directLink = document.getElementById('directLink');
-        const copyLinkBtn = document.getElementById('copyLinkBtn');
+        const downloadMethods = document.getElementById('downloadMethods');
 
-        let eepromData = null;
         let eepromFile = null;
-        let eepromDataUrl = null;
+        let eepromBlobUrl = null; // для метода 1
+        let eepromDataUrl = null; // для метода 2
 
         fileInput.addEventListener('change', () => {
             convertBtn.disabled = !fileInput.files.length;
@@ -155,7 +167,7 @@
                     const converter = new DFlashConverter();
                     converter.readFile(arrayBuffer);
                     converter.findEndblock();
-                    eepromData = converter.buildEeprom();
+                    const eepromData = converter.buildEeprom();
                     displayInfo(converter);
 
                     const bytes = new Uint8Array(eepromData.length * 2);
@@ -163,20 +175,23 @@
                     for (let i = 0; i < eepromData.length; i++) {
                         view.setUint16(i * 2, eepromData[i], false);
                     }
-
                     const trimmedBytes = bytes.slice(0x800);
                     const blob = new Blob([trimmedBytes], { type: 'application/octet-stream' });
                     const dateStr = new Date().toISOString().slice(0,10);
                     const fileName = `${dateStr}_eeprom.bin`;
                     eepromFile = new File([blob], fileName, { type: 'application/octet-stream' });
 
-                    // Для прямой ссылки используем Blob URL, который будет создаваться при клике
-                    directLink.dataset.fileName = fileName;
-                    directLinkContainer.style.display = 'block';
+                    // Подготавливаем URL заранее
+                    eepromBlobUrl = URL.createObjectURL(eepromFile);
+                    const readerDataUrl = new FileReader();
+                    readerDataUrl.onload = function(e) {
+                        eepromDataUrl = e.target.result;
+                    };
+                    readerDataUrl.readAsDataURL(eepromFile);
 
                     convertBtn.disabled = true;
                     resultDiv.style.display = 'block';
-                    downloadBtn.style.display = 'block';
+                    downloadMethods.style.display = 'flex';
 
                     try { tg.HapticFeedback.impactOccurred('medium'); } catch(e) {}
                 } catch (err) {
@@ -186,78 +201,98 @@
             reader.readAsArrayBuffer(file);
         });
 
-        // Обработчик кнопки "Скачать EEPROM"
-        downloadBtn.addEventListener('click', async () => {
-            if (!eepromFile) return;
-
-            // 1. Пробуем navigator.share для всех платформ
-            try {
-                if (navigator.canShare && navigator.canShare({ files: [eepromFile] })) {
-                    await navigator.share({ files: [eepromFile] });
-                    return;
-                }
-            } catch (err) {
-                console.log('Share отменён или не удался, пробуем скачивание');
-            }
-
-            // 2. Fallback: программное скачивание через <a download>
-            const url = URL.createObjectURL(eepromFile);
+        // Метод 1: Blob URL + a.download
+        document.getElementById('method1').addEventListener('click', () => {
+            if (!eepromBlobUrl) return;
             const a = document.createElement('a');
-            a.href = url;
+            a.href = eepromBlobUrl;
             a.download = eepromFile.name;
             a.style.display = 'none';
             document.body.appendChild(a);
             a.click();
-            
             setTimeout(() => {
                 document.body.removeChild(a);
-                URL.revokeObjectURL(url);
             }, 1500);
-
-            // 3. Дополнительный fallback: window.open
-            setTimeout(() => {
-                try {
-                    window.open(url, '_blank');
-                } catch (e) {
-                    console.log('window.open также не сработал');
-                }
-            }, 300);
-            
-            try { tg.HapticFeedback.impactOccurred('medium'); } catch(e) {}
+            try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
         });
 
-        // Обработчик прямой ссылки (создаёт Blob URL при клике)
-        directLink.addEventListener('click', (e) => {
-            e.preventDefault();
-            if (!eepromFile) return;
-            const blobUrl = URL.createObjectURL(eepromFile);
+        // Метод 2: Data URL + a.download
+        document.getElementById('method2').addEventListener('click', () => {
+            if (!eepromDataUrl) {
+                tg.showAlert('Data URL ещё не готов, подождите секунду и попробуйте снова.');
+                return;
+            }
             const a = document.createElement('a');
-            a.href = blobUrl;
+            a.href = eepromDataUrl;
             a.download = eepromFile.name;
+            a.style.display = 'none';
             document.body.appendChild(a);
             a.click();
             setTimeout(() => {
                 document.body.removeChild(a);
-                URL.revokeObjectURL(blobUrl);
             }, 1500);
+            try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
         });
 
-        copyLinkBtn.addEventListener('click', async () => {
+        // Метод 3: window.open с Blob URL
+        document.getElementById('method3').addEventListener('click', () => {
+            if (!eepromBlobUrl) return;
+            try {
+                window.open(eepromBlobUrl, '_blank');
+            } catch (e) {
+                console.log('window.open не сработал');
+            }
+            try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
+        });
+
+        // Метод 4: navigator.share
+        document.getElementById('method4').addEventListener('click', async () => {
             if (!eepromFile) return;
             try {
-                const blobUrl = URL.createObjectURL(eepromFile);
-                await navigator.clipboard.writeText(blobUrl);
-                tg.showAlert('Ссылка скопирована (Blob URL)');
-                setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+                if (navigator.canShare && navigator.canShare({ files: [eepromFile] })) {
+                    await navigator.share({ files: [eepromFile] });
+                } else {
+                    tg.showAlert('Системное меню не поддерживается');
+                }
             } catch (err) {
+                console.log('Share отменён или не удался:', err);
+            }
+            try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
+        });
+
+        // Метод 5: Копировать base64
+        document.getElementById('method5').addEventListener('click', async () => {
+            if (!eepromDataUrl) {
+                tg.showAlert('Data URL ещё не готов, подождите секунду.');
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(eepromDataUrl);
+                tg.showAlert('Base64 скопирован в буфер обмена');
+            } catch (err) {
+                // Fallback
                 const textArea = document.createElement('textarea');
-                textArea.value = URL.createObjectURL(eepromFile);
+                textArea.value = eepromDataUrl;
                 document.body.appendChild(textArea);
                 textArea.select();
                 document.execCommand('copy');
                 document.body.removeChild(textArea);
-                tg.showAlert('Ссылка скопирована (fallback)');
+                tg.showAlert('Base64 скопирован (через fallback)');
             }
+            try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
+        });
+
+        // Метод 6: iframe
+        document.getElementById('method6').addEventListener('click', () => {
+            if (!eepromBlobUrl) return;
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.src = eepromBlobUrl;
+            document.body.appendChild(iframe);
+            setTimeout(() => {
+                document.body.removeChild(iframe);
+            }, 1500);
+            try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
         });
 
         function displayInfo(converter) {
