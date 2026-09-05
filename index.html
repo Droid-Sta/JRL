@@ -64,19 +64,6 @@
         }
         .download-btn:hover { box-shadow: 0 5px 15px rgba(39,174,96,0.4); }
         .info { margin-top: 15px; font-size: 0.8rem; opacity: 0.7; text-align: center; }
-        .manual-link {
-            display: block;
-            margin-top: 10px;
-            background: rgba(255,255,255,0.2);
-            padding: 10px;
-            border-radius: 8px;
-            color: #fff;
-            text-decoration: none;
-            text-align: center;
-            font-size: 0.9rem;
-            border: 1px solid rgba(255,255,255,0.3);
-        }
-        .manual-link:hover { background: rgba(255,255,255,0.3); }
     </style>
 </head>
 <body>
@@ -100,8 +87,6 @@
                 <div class="result-value" id="vin"></div>
             </div>
             <button class="download-btn" id="downloadBtn" style="display: none;">Скачать EEPROM</button>
-            <!-- Сюда будет добавлена резервная ссылка в случае неудачи -->
-            <div id="fallbackLinkContainer" style="display: none; margin-top: 10px;"></div>
         </div>
         <div class="info">Загрузите бинарный файл D-Flash размером 32 КБ (128 блоков × 256 байт)</div>
     </div>
@@ -116,7 +101,6 @@
         const resultDiv = document.getElementById('result');
         const corruptWarning = document.getElementById('corruptWarning');
         const downloadBtn = document.getElementById('downloadBtn');
-        const fallbackLinkContainer = document.getElementById('fallbackLinkContainer');
         let eepromData = null;
         let eepromFile = null;
 
@@ -157,7 +141,6 @@
                     convertBtn.disabled = true;
                     resultDiv.style.display = 'block';
                     downloadBtn.style.display = 'block';
-                    fallbackLinkContainer.style.display = 'none'; // сброс
 
                     try { tg.HapticFeedback.impactOccurred('medium'); } catch(e) {}
                 } catch (err) {
@@ -167,70 +150,44 @@
             reader.readAsArrayBuffer(file);
         });
 
-        // УЛУЧШЕННЫЙ ОБРАБОТЧИК СКАЧИВАНИЯ
+        // ИСПРАВЛЕННЫЙ ОБРАБОТЧИК СКАЧИВАНИЯ — НЕСКОЛЬКО МЕТОДОВ
         downloadBtn.addEventListener('click', async () => {
             if (!eepromFile) return;
 
-            // 1. Web Share API (самый надёжный, если поддерживается)
+            // 1. Пробуем Web Share API (лучший вариант для Android/iOS)
             try {
                 if (navigator.canShare && navigator.canShare({ files: [eepromFile] })) {
                     await navigator.share({ files: [eepromFile] });
-                    return; // успех
+                    return;
                 }
             } catch (err) {
                 console.log('Share не удалось: ' + err.message);
             }
 
-            // 2. Попытка window.open с blob URL
+            // 2. Пробуем открыть blob URL (некоторые WebView позволяют)
             const url = URL.createObjectURL(eepromFile);
-            let win = null;
-            try {
-                win = window.open(url, '_blank');
-            } catch (err) {
-                console.log('window.open не удалось: ' + err.message);
-            }
-
-            // 3. Попытка location.href
+            const win = window.open(url, '_blank');
+            
+            // 3. Если окно не открылось – пробуем скрытую ссылку
             if (!win) {
-                try {
-                    location.href = url;
-                    return; // если сработало, вернёмся
-                } catch (err) {
-                    console.log('location.href не удалось: ' + err.message);
-                }
-            }
-
-            // 4. Попытка data URI (base64)
-            if (!win) {
-                const reader = new FileReader();
-                reader.onload = function() {
-                    const dataUrl = reader.result;
-                    try {
-                        window.open(dataUrl, '_blank');
-                    } catch (err) {
-                        console.log('data URI не удалось: ' + err.message);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = eepromFile.name;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                // Даём время на скачивание, затем проверяем, скачался ли файл
+                setTimeout(() => {
+                    // Если всё ещё не скачалось – сообщаем без ссылки
+                    if (!win) {
+                        alert('Не удалось скачать файл автоматически. Пожалуйста, откройте эту страницу в браузере Chrome и попробуйте ещё раз.');
                     }
-                };
-                reader.readAsDataURL(eepromFile);
+                }, 1000);
             }
 
-            // 5. Резервный вариант – отображаем локальную ссылку
-            setTimeout(() => {
-                if (!win) {
-                    // Создаём ссылку для ручного скачивания (blob URL)
-                    fallbackLinkContainer.innerHTML = '';
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = eepromFile.name;
-                    a.textContent = 'Нажмите здесь, если файл не скачался автоматически';
-                    a.className = 'manual-link';
-                    fallbackLinkContainer.appendChild(a);
-                    fallbackLinkContainer.style.display = 'block';
-                }
-            }, 500);
-
-            // Освобождаем URL через 10 секунд (но ссылка останется)
-            setTimeout(() => URL.revokeObjectURL(url), 10000);
+            // Освобождаем URL через 5 секунд
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
 
             try { tg.HapticFeedback.impactOccurred('medium'); } catch(e) {}
         });
