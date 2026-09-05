@@ -77,6 +77,7 @@
             font-size: 0.9rem;
             display: block;
             margin-bottom: 8px;
+            cursor: pointer;
         }
         .copy-link-btn {
             background: #f39c12;
@@ -112,9 +113,8 @@
             </div>
             <button class="download-btn" id="downloadBtn" style="display: none;">Скачать EEPROM</button>
             
-            <!-- Блок прямой ссылки (показывается после конвертации) -->
             <div class="direct-link-container" id="directLinkContainer" style="display: none;">
-                <div class="result-label" style="opacity:0.8;">Если файл не загружается, используйте прямую ссылку:</div>
+                <div class="result-label" style="opacity:0.8;">Если файл не загружается, нажмите на ссылку:</div>
                 <a href="#" id="directLink" class="direct-link" download="eeprom.bin">Прямая ссылка на загрузку файла</a>
                 <button class="copy-link-btn" id="copyLinkBtn">Копировать ссылку</button>
             </div>
@@ -158,31 +158,21 @@
                     eepromData = converter.buildEeprom();
                     displayInfo(converter);
 
-                    // Формируем байты для файла
                     const bytes = new Uint8Array(eepromData.length * 2);
                     const view = new DataView(bytes.buffer);
                     for (let i = 0; i < eepromData.length; i++) {
                         view.setUint16(i * 2, eepromData[i], false);
                     }
 
-                    // Обрезка: оставляем данные начиная с 0x800 (2048 байт)
                     const trimmedBytes = bytes.slice(0x800);
-
-                    // Создаём Blob и File с именем
                     const blob = new Blob([trimmedBytes], { type: 'application/octet-stream' });
                     const dateStr = new Date().toISOString().slice(0,10);
                     const fileName = `${dateStr}_eeprom.bin`;
                     eepromFile = new File([blob], fileName, { type: 'application/octet-stream' });
 
-                    // Создаём data URL для прямой ссылки
-                    const readerDataUrl = new FileReader();
-                    readerDataUrl.onload = function(e) {
-                        eepromDataUrl = e.target.result;
-                        directLink.href = eepromDataUrl;
-                        directLink.download = fileName;
-                        directLinkContainer.style.display = 'block';
-                    };
-                    readerDataUrl.readAsDataURL(blob);
+                    // Для прямой ссылки используем Blob URL, который будет создаваться при клике
+                    directLink.dataset.fileName = fileName;
+                    directLinkContainer.style.display = 'block';
 
                     convertBtn.disabled = true;
                     resultDiv.style.display = 'block';
@@ -200,22 +190,17 @@
         downloadBtn.addEventListener('click', async () => {
             if (!eepromFile) return;
 
-            // Определяем Android
-            const isAndroid = /Android/i.test(navigator.userAgent);
-
-            // Для Android пропускаем share (часто не сохраняет файл)
-            if (!isAndroid) {
-                try {
-                    if (navigator.canShare && navigator.canShare({ files: [eepromFile] })) {
-                        await navigator.share({ files: [eepromFile] });
-                        return;
-                    }
-                } catch (err) {
-                    console.log('Share не удался или отменён, переходим к скачиванию');
+            // 1. Пробуем navigator.share для всех платформ
+            try {
+                if (navigator.canShare && navigator.canShare({ files: [eepromFile] })) {
+                    await navigator.share({ files: [eepromFile] });
+                    return;
                 }
+            } catch (err) {
+                console.log('Share отменён или не удался, пробуем скачивание');
             }
 
-            // Стандартное скачивание через <a download>
+            // 2. Fallback: программное скачивание через <a download>
             const url = URL.createObjectURL(eepromFile);
             const a = document.createElement('a');
             a.href = url;
@@ -223,29 +208,55 @@
             a.style.display = 'none';
             document.body.appendChild(a);
             a.click();
+            
             setTimeout(() => {
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
-            }, 100);
+            }, 1500);
 
+            // 3. Дополнительный fallback: window.open
+            setTimeout(() => {
+                try {
+                    window.open(url, '_blank');
+                } catch (e) {
+                    console.log('window.open также не сработал');
+                }
+            }, 300);
+            
             try { tg.HapticFeedback.impactOccurred('medium'); } catch(e) {}
         });
 
-        // Копирование прямой ссылки
+        // Обработчик прямой ссылки (создаёт Blob URL при клике)
+        directLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (!eepromFile) return;
+            const blobUrl = URL.createObjectURL(eepromFile);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = eepromFile.name;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(blobUrl);
+            }, 1500);
+        });
+
         copyLinkBtn.addEventListener('click', async () => {
-            if (!eepromDataUrl) return;
+            if (!eepromFile) return;
             try {
-                await navigator.clipboard.writeText(eepromDataUrl);
-                tg.showAlert('Ссылка скопирована в буфер обмена');
+                const blobUrl = URL.createObjectURL(eepromFile);
+                await navigator.clipboard.writeText(blobUrl);
+                tg.showAlert('Ссылка скопирована (Blob URL)');
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
             } catch (err) {
-                // Fallback для старых браузеров
                 const textArea = document.createElement('textarea');
-                textArea.value = eepromDataUrl;
+                textArea.value = URL.createObjectURL(eepromFile);
                 document.body.appendChild(textArea);
                 textArea.select();
                 document.execCommand('copy');
                 document.body.removeChild(textArea);
-                tg.showAlert('Ссылка скопирована (через fallback)');
+                tg.showAlert('Ссылка скопирована (fallback)');
             }
         });
 
@@ -454,14 +465,12 @@
             }
 
             getInfo() {
-                // BCM: смещение 0x10 в обрезанном файле → абсолютный адрес в EEPROM = 0x800 + 0x10
                 const bcmOffset = 0x800 + 0x10;
                 let bcm = '';
                 for (let addr = bcmOffset; addr < bcmOffset + 14; addr++) {
                     bcm += String.fromCharCode(this.getByte(addr));
                 }
 
-                // VIN: смещение 0x50 в обрезанном файле → абсолютный адрес в EEPROM = 0x800 + 0x50
                 const vinOffset = 0x800 + 0x50;
                 let vin = '';
                 for (let addr = vinOffset; addr < vinOffset + 17; addr++) {
